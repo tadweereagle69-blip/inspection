@@ -1431,6 +1431,58 @@ function stopVoiceSession(){
  activeVoiceSession.manualStop=true;
  try{activeVoiceSession.recognition.stop()}catch(e){}
 }
+
+function normalizeRecognitionChunk(s){
+ return String(s||"").replace(/\s+/g," ").trim();
+}
+function sameRecognitionPhrase(a,b){
+ const clean=s=>normalizeRecognitionChunk(s)
+   .replace(/[،؛؟,.!:"'()[\]{}]/g,"")
+   .toLowerCase();
+ const aa=clean(a),bb=clean(b);
+ return !!aa && aa===bb;
+}
+function dedupeRecognitionParts(parts){
+ const out=[];
+ for(const raw of parts){
+  const part=normalizeRecognitionChunk(raw);
+  if(!part)continue;
+  // Prevent Chrome Android from emitting the same phrase in adjacent result slots.
+  if(out.length && sameRecognitionPhrase(out[out.length-1],part))continue;
+  // Also reject a phrase that is already the exact tail of the previous longer phrase.
+  if(out.length){
+   const prev=normalizeRecognitionChunk(out[out.length-1]);
+   if(prev.length>=part.length && prev.endsWith(part) && part.length>3)continue;
+   if(part.length>prev.length && part.startsWith(prev) && prev.length>3){
+    out[out.length-1]=part;
+    continue;
+   }
+  }
+  out.push(part);
+ }
+ return out;
+}
+function transcriptFromRecognitionResults(results){
+ const finals=[],interims=[];
+ for(let i=0;i<results.length;i++){
+  const res=results[i];
+  let txt=normalizeRecognitionChunk(res?.[0]?.transcript||"");
+  if(!txt)continue;
+  txt=applySpokenCommands(txt);
+  if(res.isFinal)finals.push(txt);
+  else interims.push(txt);
+ }
+ const finalText=dedupeRecognitionParts(finals).join(" ");
+ const interimText=dedupeRecognitionParts(interims).join(" ");
+ // If Android reports the same phrase as both final and interim, keep it only once.
+ const cleanInterim=(finalText && sameRecognitionPhrase(finalText,interimText))?"":interimText;
+ return {
+  finalText,
+  interimText:cleanInterim,
+  combined:joinRecognizedText(finalText,cleanInterim)
+ };
+}
+
 function startVoiceFor(el){
  if(!voiceSupported())return;
  if(activeVoiceSession){
@@ -1442,6 +1494,7 @@ function startVoiceFor(el){
  const recognition=new SpeechRecognitionCtor();
  const session={
   recognition,el,base:el.value,finalText:"",interimText:"",
+  lastCombined:"",
   manualStop:false,autoStopped:false,startedAt:0,timerInterval:null,silenceTimer:null
  };
  activeVoiceSession=session;
@@ -1467,16 +1520,21 @@ function startVoiceFor(el){
  recognition.onresult=(event)=>{
   if(activeVoiceSession!==session)return;
   resetSilenceTimer(session);
-  let interim="";
-  for(let i=event.resultIndex;i<event.results.length;i++){
-   let txt=(event.results[i][0]?.transcript||"").trim();
-   if(!txt)continue;
-   txt=applySpokenCommands(txt);
-   if(event.results[i].isFinal)session.finalText=joinRecognizedText(session.finalText,txt);
-   else interim=joinRecognizedText(interim,txt)
-  }
-  session.interimText=interim;
-  const combined=joinRecognizedText(session.finalText,session.interimText);
+
+  // IMPORTANT for Chrome Android:
+  // event.results is the current full result list. Rebuild from it instead of
+  // cumulatively appending event.resultIndex, because Android may resend the
+  // same interim/final phrase and otherwise duplicate the text.
+  const tx=transcriptFromRecognitionResults(event.results);
+  session.finalText=tx.finalText;
+  session.interimText=tx.interimText;
+
+  let combined=tx.combined;
+  // Additional guard: if the engine sends an identical visible transcript,
+  // do not touch the field again.
+  if(combined===session.lastCombined)return;
+  session.lastCombined=combined;
+
   el.value=joinRecognizedText(session.base,combined);
   dispatchTextInput(el)
  };
@@ -1498,7 +1556,15 @@ function startVoiceFor(el){
   if(activeVoiceSession!==session)return;
   clearVoiceTimers(session);
 
-  // Keep final text; if only interim existed, preserve the visible value already inserted.
+  // Final Android duplicate guard. This only removes obvious repeated phrases
+  // produced by the recognizer; it does not rewrite the user's meaning.
+  if(IS_ANDROID && el.value!==session.base){
+   const added=el.value.slice(session.base.length).trim();
+   if(added){
+    const cleaned=removeNearbyDuplicatePhrases(added).replace(/ {2,}/g," ").trim();
+    el.value=joinRecognizedText(session.base,cleaned);
+   }
+  }
   dispatchTextInput(el);
   setListeningUI(el,false);
   activeVoiceSession=null;
