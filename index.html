@@ -368,26 +368,48 @@ input,select,textarea{font-size:16px}
 </style>
 
 <style>
-/* v19 - voice input controls (kept intentionally compact to preserve the current design) */
-.text-assist-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px}
-.text-assist-btn{border:1px solid #d5e0e6;background:#f7fafb;color:#35495e;border-radius:9px;padding:6px 9px;min-height:34px;font-size:12px;font-weight:700;touch-action:manipulation}
-.text-assist-btn:active{transform:translateY(1px)}
-.text-assist-btn.mic{background:#eef8f9;color:#087681;border-color:#c9e7e9}
-.text-assist-btn.correct{background:#f1f8f4;color:#176846;border-color:#cfe5d6}
-.text-assist-btn.undo{background:#f5f6f7;color:#586472;border-color:#dce1e5}
-.text-assist-btn.stop{background:#fff0f0;color:#b42318;border-color:#efc2c2}
-.text-assist-btn:disabled{opacity:.48;cursor:not-allowed;transform:none}
-.listen-status{display:none;align-items:center;gap:5px;color:#b42318;font-size:12px;font-weight:800}
-.listen-status.show{display:inline-flex}
-.listen-status.info{color:#5d6976}
-.listen-status.error{color:#b42318}
+/* v20 - smart inline voice assistant */
+.voice-field-wrap{position:relative}
+.voice-field-wrap textarea{padding-inline-end:50px}
+.voice-main-btn{
+ position:absolute;top:8px;left:8px;width:38px;height:38px;min-height:38px;
+ border:1px solid #cbe4e7;background:#eef8f9;color:#087681;border-radius:50%;
+ display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:800;
+ box-shadow:0 2px 8px rgba(8,118,129,.08);z-index:2;touch-action:manipulation
+}
+.voice-main-btn.listening{background:#fff0f0;color:#b42318;border-color:#efc2c2;animation:voicePulse 1.25s infinite}
+@keyframes voicePulse{0%,100%{box-shadow:0 0 0 0 rgba(180,35,24,.18)}50%{box-shadow:0 0 0 7px rgba(180,35,24,0)}}
+.voice-main-btn:active{transform:scale(.96)}
+.voice-main-btn.hidden{display:none!important}
+
+.voice-meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:6px;min-height:24px}
+.voice-status{display:none;align-items:center;gap:5px;font-size:12px;font-weight:800}
+.voice-status.show{display:inline-flex}
+.voice-status.listening{color:#b42318}
+.voice-status.info{color:#5d6976}
+.voice-status.error{color:#b42318}
+.voice-timer{font-variant-numeric:tabular-nums;direction:ltr}
+
+.voice-secondary{display:flex;gap:5px;flex-wrap:wrap}
+.voice-secondary .voice-action{
+ border:1px solid #d5e0e6;background:#f7fafb;color:#405265;border-radius:9px;
+ padding:5px 8px;min-height:32px;font-size:11px;font-weight:700;touch-action:manipulation
+}
+.voice-secondary .voice-action.improve{background:#f1f8f4;color:#176846;border-color:#cfe5d6}
+.voice-secondary .voice-action.undo{background:#f5f6f7;color:#586472;border-color:#dce1e5}
+.voice-secondary .voice-action.hidden{display:none!important}
+
+.voice-field-wrap.voice-added textarea{animation:voiceAddedFlash 1.1s ease}
+@keyframes voiceAddedFlash{0%{box-shadow:0 0 0 3px rgba(22,138,85,.20);background:#f6fff9}100%{box-shadow:none;background:#fff}}
+
 @media(max-width:760px){
- .text-assist-tools{gap:5px}
- .text-assist-btn{font-size:11px;padding:6px 8px;min-height:36px}
- .listen-status{font-size:11px}
+ .voice-main-btn{width:36px;height:36px;min-height:36px;top:7px;left:7px;font-size:16px}
+ .voice-field-wrap textarea{padding-inline-end:47px}
+ .voice-status{font-size:11px}
+ .voice-secondary .voice-action{font-size:10.5px;padding:5px 7px;min-height:31px}
 }
 @media print{
- .text-assist-tools{display:none!important}
+ .voice-main-btn,.voice-meta{display:none!important}
 }
 </style>
 </head>
@@ -618,14 +640,15 @@ function showSection(id){["setup","checklist","report","history"].forEach(x=>{co
 document.querySelectorAll(".nav button").forEach(b=>b.onclick=()=>showSection(b.dataset.go));
 
 
-// Voice-to-text + local text cleanup.
-// No external API key is used. Speech recognition is supplied by the browser.
+
+// Smart voice-to-text + conservative local text cleanup.
+// No paid API or external API key is used.
 const SpeechRecognitionCtor=window.SpeechRecognition||window.webkitSpeechRecognition||null;
 const textUndoStacks=new WeakMap();
 let activeVoiceSession=null;
 
 function voiceSupported(){
- return !!SpeechRecognitionCtor && (window.isSecureContext!==false);
+ return !!SpeechRecognitionCtor && window.isSecureContext!==false;
 }
 function pushTextUndo(el){
  if(!el)return;
@@ -635,17 +658,20 @@ function pushTextUndo(el){
   if(stack.length>12)stack.shift();
  }
  textUndoStacks.set(el,stack);
- updateTextAssistState(el);
+ updateVoiceActions(el);
 }
-function updateTextAssistState(el){
- const tools=el?.parentElement?.querySelector?.('.text-assist-tools[data-for-textarea="1"]');
- if(!tools)return;
- const undo=tools.querySelector('[data-text-action="undo"]');
- if(undo)undo.disabled=!(textUndoStacks.get(el)||[]).length;
+function updateVoiceActions(el){
+ const wrap=el?.closest?.(".voice-field-wrap");
+ if(!wrap)return;
+ const improve=wrap.querySelector('[data-voice-action="improve"]');
+ const undo=wrap.querySelector('[data-voice-action="undo"]');
+ if(improve)improve.classList.toggle("hidden",!el.value.trim());
+ if(undo)undo.classList.toggle("hidden",!(textUndoStacks.get(el)||[]).length);
 }
 function dispatchTextInput(el){
  el.dispatchEvent(new Event("input",{bubbles:true}));
  el.dispatchEvent(new Event("change",{bubbles:true}));
+ updateVoiceActions(el);
 }
 function joinRecognizedText(base,addition){
  base=String(base||"");
@@ -655,9 +681,69 @@ function joinRecognizedText(base,addition){
  const needsSpace=!/[\s\n]$/.test(base);
  return base+(needsSpace?" ":"")+addition;
 }
+
+function applySpokenCommands(text){
+ let t=String(text||"");
+ // Common Arabic speech commands. Ordered from longer to shorter.
+ const rules=[
+  [/\bسطر\s+جديد\b/gi,"\n"],
+  [/\bفقرة\s+جديدة\b/gi,"\n\n"],
+  [/\bعلامة\s+استفهام\b/gi,"؟"],
+  [/\bعلامة\s+تعجب\b/gi,"!"],
+  [/\bفاصلة\s+منقوطة\b/gi,"؛"],
+  [/\bفاصلة\b/gi,"،"],
+  [/\bنقطة\b/gi,"."],
+  [/\bنقطتين\b/gi,":"],
+  [/\bنقطتان\b/gi,":"]
+ ];
+ for(const [rx,to] of rules)t=t.replace(rx,to);
+ return t;
+}
+function normalizeInspectionTerms(text){
+ let t=String(text||"");
+ const replacements=[
+  // field / safety terms
+  [/\bبي بي اي\b/gi,"PPE"],
+  [/\bبي\.?\s*بي\.?\s*اي\b/gi,"PPE"],
+  [/\bمعدات الوقايه الشخصيه\b/gi,"معدات الوقاية الشخصية"],
+  [/\bمعدات الوقاية الشخصيه\b/gi,"معدات الوقاية الشخصية"],
+  [/\bقفازات\b/gi,"قفازات"],
+  [/\bكمامه\b/gi,"كمامة"],
+  [/\bطفايه\b/gi,"طفاية"],
+  [/\bمركبه\b/gi,"مركبة"],
+  [/\bالمركبه\b/gi,"المركبة"],
+  [/\bمبيد\b/gi,"مبيد"],
+  [/\bالمبيدات\b/gi,"المبيدات"],
+  [/\bاجراء تصحيحي\b/gi,"إجراء تصحيحي"],
+  [/\bالاجراء التصحيحي\b/gi,"الإجراء التصحيحي"],
+  [/\bغير مطابق\b/gi,"غير مطابق"],
+  [/\bقائد الفريق\b/gi,"قائد الفريق"],
+  [/\bمشرف المنطقه\b/gi,"مشرف المنطقة"],
+  [/\bالسلامه\b/gi,"السلامة"],
+  [/\bالملاحظه\b/gi,"الملاحظة"],
+  [/\bالملاحظات\b/gi,"الملاحظات"]
+ ];
+ for(const [rx,to] of replacements)t=t.replace(rx,to);
+ return t;
+}
+function removeNearbyDuplicatePhrases(text){
+ // Remove obvious speech-engine repetition of 1–4 word phrases:
+ // "لا يوجد قفازات لا يوجد قفازات" -> "لا يوجد قفازات"
+ let t=String(text||"");
+ for(let size=4;size>=1;size--){
+  const word=String.raw`[\u0600-\u06FF\w]+`;
+  const phrase=Array(size).fill(word).join(String.raw`\s+`);
+  const rx=new RegExp(String.raw`\b(${phrase})\s+\1\b`,"gi");
+  let prev;
+  do{prev=t;t=t.replace(rx,"$1")}while(t!==prev)
+ }
+ return t
+}
 function normalizeSimpleArabicText(text){
  let t=String(text||"").replace(/\r\n?/g,"\n");
- // Obvious local-only corrections, intentionally conservative.
+ t=applySpokenCommands(t);
+ t=normalizeInspectionTerms(t);
+
  const replacements=[
   [/لايوجد/g,"لا يوجد"],
   [/غيرمطابق/g,"غير مطابق"],
@@ -670,53 +756,86 @@ function normalizeSimpleArabicText(text){
   [/شيئ/g,"شيء"],
   [/ملاحضات/g,"ملاحظات"],
   [/ملاحضه/g,"ملاحظة"],
-  [/ملاحض/g,"ملاحظ"]
+  [/ملاحض/g,"ملاحظ"],
+  [/فورا\b/g,"فورًا"]
  ];
  for(const [rx,to] of replacements)t=t.replace(rx,to);
 
- // Normalize spaces and punctuation.
- t=t.replace(/[ \t]+/g," ")
-    .replace(/ *\n */g,"\n")
-    .replace(/\n{3,}/g,"\n\n")
-    .replace(/\s+([،؛؟,.!])/g,"$1")
-    .replace(/([،؛؟,.!]){2,}/g,"$1")
-    .replace(/([،؛؟,.!])(?=[^\s\n])/g,"$1 ");
+ t=removeNearbyDuplicatePhrases(t);
 
- // Remove exact adjacent duplicate words created by speech recognition.
- const parts=t.split(/(\s+)/);
- const out=[];let prevWord="";
+ // Remove adjacent duplicate single words.
+ const parts=t.split(/(\s+)/),out=[];let prevWord="";
  for(const part of parts){
   if(/^\s+$/.test(part)){if(out.length&&out[out.length-1]!==" ")out.push(" ");continue}
   const key=part.replace(/[،؛؟,.!:"'()[\]{}]/g,"").trim().toLowerCase();
-  if(key && prevWord && key===prevWord)continue;
-  out.push(part);
-  if(key)prevWord=key;
+  if(key&&prevWord&&key===prevWord)continue;
+  out.push(part);if(key)prevWord=key
  }
- t=out.join("").replace(/ {2,}/g," ").trim();
+ t=out.join("");
 
- // Add terminal punctuation for a normal statement when none exists.
- if(t && !/[.!؟]$/.test(t))t+=".";
+ // Spacing and punctuation.
+ t=t.replace(/[ \t]+/g," ")
+    .replace(/ *\n */g,"\n")
+    .replace(/\n{3,}/g,"\n\n")
+    .replace(/\s+([،؛؟,.!:])/g,"$1")
+    .replace(/([،؛؟,.!:]){2,}/g,"$1")
+    .replace(/([،؛؟,.!:])(?=[^\s\n])/g,"$1 ")
+    .replace(/ {2,}/g," ")
+    .trim();
+
+ if(t&&!/[.!؟]$/.test(t))t+=".";
  return t;
 }
-function showAssistMessage(el,msg,kind="info",timeout=2600){
- const tools=el?.parentElement?.querySelector?.('.text-assist-tools[data-for-textarea="1"]');
- const st=tools?.querySelector(".listen-status");
+function formatElapsed(sec){
+ sec=Math.max(0,Math.floor(sec||0));
+ return `${String(Math.floor(sec/60)).padStart(2,"0")}:${String(sec%60).padStart(2,"0")}`;
+}
+function setVoiceStatus(el,msg,kind="",show=true){
+ const wrap=el?.closest?.(".voice-field-wrap"),st=wrap?.querySelector(".voice-status");
  if(!st)return;
- st.textContent=msg;st.className=`listen-status show ${kind}`;
- if(timeout)setTimeout(()=>{if(!activeVoiceSession||activeVoiceSession.el!==el){st.className="listen-status";st.textContent=""}},timeout);
+ st.textContent=msg||"";
+ st.className=`voice-status${show?" show":""}${kind?" "+kind:""}`;
+}
+function flashVoiceAdded(el){
+ const wrap=el?.closest?.(".voice-field-wrap");
+ if(!wrap)return;
+ wrap.classList.remove("voice-added");
+ void wrap.offsetWidth;
+ wrap.classList.add("voice-added");
+ setTimeout(()=>wrap.classList.remove("voice-added"),1200);
 }
 function setListeningUI(el,on){
- const tools=el?.parentElement?.querySelector?.('.text-assist-tools[data-for-textarea="1"]');
- if(!tools)return;
- const mic=tools.querySelector('[data-text-action="speak"]');
- const stop=tools.querySelector('[data-text-action="stop"]');
- const st=tools.querySelector(".listen-status");
- if(mic)mic.disabled=on||!voiceSupported();
- if(stop)stop.classList.toggle("hidden",!on);
- if(st){
-  if(on){st.textContent="🔴 جاري الاستماع...";st.className="listen-status show"}
-  else if(st.textContent==="🔴 جاري الاستماع..."){st.textContent="";st.className="listen-status"}
+ const wrap=el?.closest?.(".voice-field-wrap");
+ if(!wrap)return;
+ const btn=wrap.querySelector(".voice-main-btn");
+ if(on){
+  btn.classList.add("listening");
+  btn.innerHTML="■";
+  btn.title="إيقاف";
+  setVoiceStatus(el,"🔴 جاري الاستماع... 00:00","listening",true)
+ }else{
+  btn.classList.remove("listening");
+  btn.innerHTML="🎤";
+  btn.title="تحدث";
+  const st=wrap.querySelector(".voice-status");
+  if(st?.classList.contains("listening"))setVoiceStatus(el,"","",false)
  }
+}
+function clearVoiceTimers(session){
+ if(!session)return;
+ if(session.timerInterval)clearInterval(session.timerInterval);
+ if(session.silenceTimer)clearTimeout(session.silenceTimer);
+ session.timerInterval=null;session.silenceTimer=null
+}
+function resetSilenceTimer(session){
+ if(!session||activeVoiceSession!==session)return;
+ if(session.silenceTimer)clearTimeout(session.silenceTimer);
+ // Auto-stop after ~5 seconds without any recognition activity.
+ session.silenceTimer=setTimeout(()=>{
+  if(activeVoiceSession!==session)return;
+  session.autoStopped=true;
+  try{session.recognition.stop()}catch(e){}
+ },5000)
 }
 function stopVoiceSession(){
  if(!activeVoiceSession)return;
@@ -724,23 +843,17 @@ function stopVoiceSession(){
  try{activeVoiceSession.recognition.stop()}catch(e){}
 }
 function startVoiceFor(el){
- if(!voiceSupported()){
-  showAssistMessage(el,"التحدث غير مدعوم هنا — استخدم الكتابة اليدوية.","error",3500);
-  return;
- }
+ if(!voiceSupported())return;
  if(activeVoiceSession){
   if(activeVoiceSession.el===el){stopVoiceSession();return}
   stopVoiceSession();
  }
  pushTextUndo(el);
+
  const recognition=new SpeechRecognitionCtor();
  const session={
-  recognition,el,
-  base:el.value,
-  finalText:"",
-  interimText:"",
-  manualStop:false,
-  started:false
+  recognition,el,base:el.value,finalText:"",interimText:"",
+  manualStop:false,autoStopped:false,startedAt:0,timerInterval:null,silenceTimer:null
  };
  activeVoiceSession=session;
 
@@ -751,94 +864,131 @@ function startVoiceFor(el){
 
  recognition.onstart=()=>{
   if(activeVoiceSession!==session)return;
-  session.started=true;setListeningUI(el,true)
+  session.startedAt=Date.now();
+  setListeningUI(el,true);
+  session.timerInterval=setInterval(()=>{
+   if(activeVoiceSession!==session)return;
+   const sec=(Date.now()-session.startedAt)/1000;
+   setVoiceStatus(el,`🔴 جاري الاستماع... ${formatElapsed(sec)}`,"listening",true)
+  },500);
+  resetSilenceTimer(session)
  };
+ recognition.onspeechstart=()=>resetSilenceTimer(session);
+ recognition.onsoundstart=()=>resetSilenceTimer(session);
  recognition.onresult=(event)=>{
   if(activeVoiceSession!==session)return;
+  resetSilenceTimer(session);
   let interim="";
   for(let i=event.resultIndex;i<event.results.length;i++){
-   const txt=(event.results[i][0]?.transcript||"").trim();
+   let txt=(event.results[i][0]?.transcript||"").trim();
    if(!txt)continue;
-   if(event.results[i].isFinal){
-    session.finalText=joinRecognizedText(session.finalText,txt);
-   }else{
-    interim=joinRecognizedText(interim,txt);
-   }
+   txt=applySpokenCommands(txt);
+   if(event.results[i].isFinal)session.finalText=joinRecognizedText(session.finalText,txt);
+   else interim=joinRecognizedText(interim,txt)
   }
   session.interimText=interim;
   const combined=joinRecognizedText(session.finalText,session.interimText);
   el.value=joinRecognizedText(session.base,combined);
-  dispatchTextInput(el);
+  dispatchTextInput(el)
  };
  recognition.onerror=(event)=>{
   if(activeVoiceSession!==session)return;
   const messages={
    "not-allowed":"لم يتم السماح باستخدام الميكروفون.",
-   "service-not-allowed":"خدمة التعرف على الكلام غير متاحة.",
+   "service-not-allowed":"التعرف على الكلام غير متاح على هذا الجهاز.",
    "audio-capture":"تعذر الوصول إلى الميكروفون.",
    "network":"تعذر الاتصال بخدمة التعرف على الكلام.",
-   "no-speech":"لم يتم التقاط كلام واضح.",
-   "aborted":"تم إيقاف الاستماع."
+   "no-speech":"لم أسمع بوضوح، حاول مرة أخرى."
   };
-  if(event.error!=="aborted")showAssistMessage(el,messages[event.error]||"تعذر التعرف على الكلام.","error",3500);
+  if(event.error!=="aborted"){
+   setVoiceStatus(el,messages[event.error]||"تعذر التعرف على الكلام.","error",true)
+   setTimeout(()=>{if(!activeVoiceSession)setVoiceStatus(el,"","",false)},3000)
+  }
  };
  recognition.onend=()=>{
   if(activeVoiceSession!==session)return;
-  // Keep whatever text was visible, including the latest interim phrase if Safari ends on silence.
+  clearVoiceTimers(session);
+
+  // Keep final text; if only interim existed, preserve the visible value already inserted.
   dispatchTextInput(el);
   setListeningUI(el,false);
   activeVoiceSession=null;
-  updateTextAssistState(el)
+
+  const spoken=el.value!==session.base;
+  if(spoken){
+   flashVoiceAdded(el);
+   setVoiceStatus(el,session.autoStopped?"✓ تم الإيقاف تلقائيًا بعد السكوت":"✓ تمت إضافة الكلام","info",true);
+   setTimeout(()=>{if(!activeVoiceSession)setVoiceStatus(el,"","",false)},2200)
+  }else{
+   setVoiceStatus(el,"لم أسمع بوضوح، حاول مرة أخرى.","info",true);
+   setTimeout(()=>{if(!activeVoiceSession)setVoiceStatus(el,"","",false)},2200)
+  }
+  updateVoiceActions(el)
  };
+
  try{recognition.start()}
  catch(e){
-  activeVoiceSession=null;
-  setListeningUI(el,false);
-  showAssistMessage(el,"تعذر بدء الميكروفون. جرّب مرة أخرى.","error",3500)
+  activeVoiceSession=null;clearVoiceTimers(session);setListeningUI(el,false);
+  setVoiceStatus(el,"تعذر بدء الميكروفون. جرّب مرة أخرى.","error",true);
+  setTimeout(()=>setVoiceStatus(el,"","",false),3000)
  }
 }
-function correctTextLocally(el){
- if(!el)return;
+function improveTextLocally(el){
+ if(!el||!el.value.trim())return;
  const before=el.value,after=normalizeSimpleArabicText(before);
- if(after===before){showAssistMessage(el,"النص لا يحتاج تصحيحًا واضحًا.","info",1800);return}
+ if(after===before){
+  setVoiceStatus(el,"النص مرتب بالفعل.","info",true);
+  setTimeout(()=>setVoiceStatus(el,"","",false),1600);
+  return
+ }
  pushTextUndo(el);
- el.value=after;dispatchTextInput(el);
- showAssistMessage(el,"✓ تم التصحيح محليًا","info",1800);
- updateTextAssistState(el)
+ el.value=after;dispatchTextInput(el);flashVoiceAdded(el);
+ setVoiceStatus(el,"✨ تم تحسين النص","info",true);
+ setTimeout(()=>setVoiceStatus(el,"","",false),1800)
 }
-function undoTextAssist(el){
+function undoVoiceAction(el){
  const stack=textUndoStacks.get(el)||[];
- if(!stack.length){showAssistMessage(el,"لا يوجد نص سابق للتراجع إليه.","info",1800);return}
+ if(!stack.length)return;
  if(activeVoiceSession?.el===el)stopVoiceSession();
- el.value=stack.pop();textUndoStacks.set(el,stack);dispatchTextInput(el);
- showAssistMessage(el,"↩ تم التراجع","info",1500);
- updateTextAssistState(el)
+ el.value=stack.pop();
+ textUndoStacks.set(el,stack);
+ dispatchTextInput(el);flashVoiceAdded(el);
+ setVoiceStatus(el,"↩ تم التراجع","info",true);
+ setTimeout(()=>setVoiceStatus(el,"","",false),1500)
 }
 function enhanceTextareas(root=document){
  const selectors='#visitSummary, textarea[data-ifield="note"], textarea[data-ifield="action"], textarea[data-ifield="followupNote"]';
  root.querySelectorAll(selectors).forEach(el=>{
-  if(el.dataset.textAssist==="1")return;
-  el.dataset.textAssist="1";
-  const tools=document.createElement("div");
-  tools.className="text-assist-tools";tools.dataset.forTextarea="1";
-  tools.innerHTML=`
-   <button type="button" class="text-assist-btn mic" data-text-action="speak">🎤 تحدث</button>
-   <button type="button" class="text-assist-btn correct" data-text-action="correct">✓ تصحيح</button>
-   <button type="button" class="text-assist-btn undo" data-text-action="undo" disabled>↩ تراجع</button>
-   <span class="listen-status" aria-live="polite"></span>
-   <button type="button" class="text-assist-btn stop hidden" data-text-action="stop">■ إيقاف</button>`;
-  el.insertAdjacentElement("afterend",tools);
+  if(el.dataset.voiceSmart==="1")return;
+  el.dataset.voiceSmart="1";
 
-  const mic=tools.querySelector('[data-text-action="speak"]');
-  if(!voiceSupported()){
-   mic.disabled=true;
-   mic.title=window.isSecureContext===false?"ميزة التحدث تحتاج اتصال HTTPS آمن.":"ميزة التحدث غير مدعومة في هذا المتصفح.";
-  }
-  tools.querySelector('[data-text-action="speak"]').onclick=()=>startVoiceFor(el);
-  tools.querySelector('[data-text-action="stop"]').onclick=()=>stopVoiceSession();
-  tools.querySelector('[data-text-action="correct"]').onclick=()=>correctTextLocally(el);
-  tools.querySelector('[data-text-action="undo"]').onclick=()=>undoTextAssist(el);
-  updateTextAssistState(el)
+  const parent=el.parentElement;
+  const wrap=document.createElement("div");
+  wrap.className="voice-field-wrap";
+  parent.insertBefore(wrap,el);
+  wrap.appendChild(el);
+
+  const mic=document.createElement("button");
+  mic.type="button";mic.className="voice-main-btn";mic.innerHTML="🎤";mic.title="تحدث";
+  if(!voiceSupported())mic.classList.add("hidden");
+  wrap.appendChild(mic);
+
+  const meta=document.createElement("div");
+  meta.className="voice-meta";
+  meta.innerHTML=`
+    <span class="voice-status" aria-live="polite"></span>
+    <div class="voice-secondary">
+      <button type="button" class="voice-action improve hidden" data-voice-action="improve">✨ تحسين النص</button>
+      <button type="button" class="voice-action undo hidden" data-voice-action="undo">↩ تراجع</button>
+    </div>`;
+  wrap.appendChild(meta);
+
+  mic.onclick=()=>{if(activeVoiceSession?.el===el)stopVoiceSession();else startVoiceFor(el)};
+  meta.querySelector('[data-voice-action="improve"]').onclick=()=>improveTextLocally(el);
+  meta.querySelector('[data-voice-action="undo"]').onclick=()=>undoVoiceAction(el);
+
+  el.addEventListener("input",()=>updateVoiceActions(el));
+  updateVoiceActions(el)
  })
 }
 
